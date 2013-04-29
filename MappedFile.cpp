@@ -32,7 +32,7 @@ using namespace cat;
 #if defined(CAT_OS_LINUX) || defined(CAT_OS_OSX)
 # include <sys/mman.h>
 # include <sys/stat.h>
-# include <sys/fcntl.h>
+# include <fcntl.h>
 # include <errno.h>
 #endif
 
