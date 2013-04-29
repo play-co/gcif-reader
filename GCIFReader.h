@@ -104,7 +104,7 @@ int gcif_sig_cmp(const void *file_data_in, long file_size_bytes_in);
 
 	This is safe to call when the read function fails.
 */
-void gcif_free_image(GCIFImage *image);
+void gcif_free_image(const void *rgba);
 
 
 #ifdef __cplusplus

@@ -120,12 +120,11 @@ extern "C" int gcif_read_memory(const void *file_data_in, long file_size_bytes_i
 	return gcif_read(reader, image_out);
 }
 
-extern "C" void gcif_free_image(GCIFImage *image) {
+extern "C" void gcif_free_image(const void *rgba) {
 	// If image data was allocated,
-	if (image->rgba) {
+	if (rgba) {
 		// Free it
-		delete []image->rgba;
-		image->rgba = 0;
+		delete []reinterpret_cast<const u8 *>( rgba );
 	}
 }
 
