@@ -32,6 +32,24 @@
 namespace cat {
 
 
+// Disable libpng
+//#define CAT_ENABLE_LIBPNG
+
+// Disable dominant color mask in encoder
+//#define CAT_DISABLE_MASK
+	
+// Unroll reader
+#define CAT_UNROLL_READER
+
+// Dump filter choices
+//#define CAT_DUMP_FILTERS
+
+// Dump LZ header contents
+//#define CAT_DUMP_LZ
+
+// Bloat the file size a lot to check for desynchronization points in decoder
+//#define CAT_DESYNCH_CHECKS
+
 // Enable memory-mapped file IO, allows API that has a file name as input
 //#define CAT_COMPILE_MMAP
 
@@ -39,14 +57,11 @@ namespace cat {
 //#define CAT_COLLECT_STATS
 
 // Disable inane-level (verbose) logging in Release mode
-#define CAT_RELEASE_DISABLE_INANE
+//#define CAT_RELEASE_DISABLE_INANE
 
 // Modify level of detail for enforcer strings
 #define CAT_USE_ENFORCE_EXPRESSION_STRING
 #define CAT_USE_ENFORCE_FILE_LINE_STRING
-
-// Bloat the file size a lot to check for desynchronization points in decoder
-//#define CAT_DESYNCH_CHECKS
 
 // This definition overrides CAT_BUILD_DLL below.  Neuters CAT_EXPORT macro so symbols are
 // neither exported or imported.

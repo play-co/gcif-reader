@@ -26,69 +26,92 @@
 	POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef IMAGE_MASK_READER_HPP
-#define IMAGE_MASK_READER_HPP
+#ifndef SMALL_PALETTE_READER_HPP
+#define SMALL_PALETTE_READER_HPP
 
 #include "Platform.hpp"
+#include "GCIFReader.h"
 #include "ImageReader.hpp"
-#include "Filters.hpp"
-#include "SmartArray.hpp"
+#include "ImageMaskReader.hpp"
+#include "MonoReader.hpp"
+
+#include <vector>
+#include <map>
 
 /*
- * Game Closure Dominant Color Mask Decompression
+ * Game Closure Small Palette Decompression
  */
 
 namespace cat {
 
 
-//// ImageMaskReader
+//// SmallPaletteReader
 
-class ImageMaskReader {
-	SmartArray<u32> _mask;
+class SmallPaletteReader {
+public:
+	static const int SMALL_PALETTE_MAX = 16;
 
-	int _xsize, _ysize, _stride;
+protected:
+	static const int MAX_SYMS = 256;
 
-	bool _enabled;
+	u32 _palette[SMALL_PALETTE_MAX];
+	int _palette_size;
 
-	SmartArray<u8> _lz, _rle;
-	int _rle_remaining;
-	const u8 *_rle_next;
-	int _scanline_y;
+	ImageMaskReader * CAT_RESTRICT _mask;
 
-	u32 _color;
+	u8 * CAT_RESTRICT _rgba;
+	u16 _xsize, _ysize, _pack_x, _pack_y;
 
-	int decodeLZ(ImageReader & CAT_RESTRICT reader);
+	SmartArray<u8> _image;
 
-	int init(int xsize, int ysize);
+	int _pack_palette_size;	// Palette size for repacked bytes
+	u8 _pack_palette[MAX_SYMS];
+	u8 _mask_palette;	// Masked palette index
+
+	MonoReader _mono_decoder;
+
+	int readSmallPalette(ImageReader & CAT_RESTRICT reader);
+	int readPackPalette(ImageReader & CAT_RESTRICT reader);
+	int readTables(ImageReader & CAT_RESTRICT reader);
+	int readPixels(ImageReader & CAT_RESTRICT reader);
+	int unpackPixels();
 
 #ifdef CAT_COLLECT_STATS
 public:
 	struct _Stats {
-		double initUsec;
-		double lzUsec;
+		double smallPaletteUsec;
+		double packPaletteUsec;
+		double tablesUsec;
+		double pixelsUsec;
+		double unpackUsec;
+
 		double overallUsec;
 	} Stats;
-#endif // CAT_COLLECT_STATS
+#endif
 
 public:
-	int read(ImageReader & CAT_RESTRICT reader, int planes, int xsize, int ysize);
-
-	// Returns bitmask for scanline, MSB = first pixel
-	const u32 *nextScanline();
-
 	CAT_INLINE bool enabled() {
-		return _enabled;
+		return _palette_size > 0;
 	}
 
-	CAT_INLINE u32 getColor() {
-		return _color;
+	CAT_INLINE bool multipleColors() {
+		return _palette_size > 1;
+	}
+
+	int readHead(ImageReader & CAT_RESTRICT reader, u8 * CAT_RESTRICT rgba);
+	int readTail(ImageReader & CAT_RESTRICT reader, ImageMaskReader & CAT_RESTRICT mask);
+
+	CAT_INLINE u16 getPackX() {
+		return _pack_x;
+	}
+	CAT_INLINE u16 getPackY() {
+		return _pack_y;
 	}
 
 #ifdef CAT_COLLECT_STATS
 	bool dumpStats();
 #else
 	CAT_INLINE bool dumpStats() {
-		// Not implemented
 		return false;
 	}
 #endif
@@ -97,5 +120,5 @@ public:
 
 } // namespace cat
 
-#endif // IMAGE_MASK_READER_HPP
+#endif // SMALL_PALETTE_READER_HPP
 

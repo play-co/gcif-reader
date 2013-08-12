@@ -26,72 +26,77 @@
 	POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef CAT_HUFFMAN_DECODER_HPP
-#define CAT_HUFFMAN_DECODER_HPP
+#ifndef IMAGE_PALETTE_READER_HPP
+#define IMAGE_PALETTE_READER_HPP
 
-#include "Platform.hpp"
 #include "ImageReader.hpp"
+#include "Enforcer.hpp"
+#include "MonoReader.hpp"
+#include "ImageMaskReader.hpp"
 #include "SmartArray.hpp"
 
-// See copyright notice at the top of HuffmanEncoder.hpp
+/*
+ * Game Closure Global Palette Decompression
+ */
 
 namespace cat {
 
 
-//// HuffmanDecoder
+//// ImagePaletteReader
 
-class HuffmanDecoder {
+class ImagePaletteReader {
 public:
-	static const u32 MAX_CODE_SIZE = 16; // Max bits per Huffman code (16 is upper limit)
-	static const u32 MAX_TABLE_BITS = 11; // Time-memory tradeoff LUT optimization limit
-	static const int TABLE_THRESH = 20; // Number of symbols before table is compressed
+	static const int PALETTE_MAX = 256;
+	static const int ENCODER_ZRLE_SYMS = 16;
+	static const int HUFF_LUT_BITS = 7;
 
 protected:
-	u32 _num_syms;
-	u32 _max_codes[MAX_CODE_SIZE + 1];
-	int _val_ptrs[MAX_CODE_SIZE + 1];
-	u32 _total_used_syms;
+	u32 _palette[PALETTE_MAX];
+	int _palette_size;
+	u8 _mask_palette;	// Masked palette index
 
-	SmartArray<u32> _sorted_symbol_order;
-	u32 _cur_sorted_symbol_order_size;
+	ImageMaskReader * CAT_RESTRICT _mask;
 
-	u8 _min_code_size, _max_code_size;
+	u8 * CAT_RESTRICT _rgba;
+	u16 _xsize, _ysize;
 
-	u32 _table_bits;
+	SmartArray<u8> _image;
 
-	SmartArray<u32> _lookup;
+	MonoReader _mono_decoder;
 
-	u32 _table_max_code;
-	u32 _decode_start_code_size;
+	int readPalette(ImageReader & CAT_RESTRICT reader);
+	int readTables(ImageReader & CAT_RESTRICT reader);
+	int readPixels(ImageReader & CAT_RESTRICT reader);
 
-	u32 _table_shift;
+#ifdef CAT_COLLECT_STATS
+public:
+	struct _Stats {
+		double paletteUsec;
+		double tablesUsec;
+		double pixelsUsec;
 
-	u32 _one_sym;
+		int colorCount;
+	} Stats;
+#endif
 
 public:
-	bool init(int num_syms, const u8 * CAT_RESTRICT codelens, u32 table_bits);
-	bool init(int num_syms, ImageReader & CAT_RESTRICT reader, u32 table_bits);
+	CAT_INLINE bool enabled() {
+		return _palette_size > 0;
+	}
 
-	u32 next(ImageReader &reader);
-};
+	int read(ImageReader & CAT_RESTRICT reader, ImageMaskReader & CAT_RESTRICT mask, GCIFImage * CAT_RESTRICT image);
 
-
-// Decoder for Huffman tables
-class HuffmanTableDecoder {
-	static const int NUM_SYMS = HuffmanDecoder::MAX_CODE_SIZE + 1;
-
-	HuffmanDecoder _decoder;
-	int _zeroRun;
-	bool _lastZero;
-
-public:
-	bool init(ImageReader &reader);
-
-	u8 next(ImageReader &reader);
+#ifdef CAT_COLLECT_STATS
+	bool dumpStats();
+#else
+	CAT_INLINE bool dumpStats() {
+		return false;
+	}
+#endif
 };
 
 
 } // namespace cat
 
-#endif // CAT_HUFFMAN_DECODER_HPP
+#endif // IMAGE_PALETTE_READER_HPP
 

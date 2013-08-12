@@ -50,9 +50,11 @@ enum GCIFReaderErrors {
 	GCIF_RE_LZ_CODES,	// LZ codelen read failed
 	GCIF_RE_LZ_BAD,		// Bad data in LZ section
 
-	GCIF_RE_CM_CODES,	// CM codelen read failed
+	GCIF_RE_BAD_PAL,	// Bad data in Palette section
 
-	GCIF_RE_BAD_HASH,	// Image hash does not match
+	GCIF_RE_BAD_MONO,	// Bad data in Monochrome section
+
+	GCIF_RE_BAD_RGBA,	// Bad data in RGBA section
 };
 
 // Returns a string representation of the above error codes
@@ -61,8 +63,8 @@ const char *gcif_read_errstr(int err);
 
 // Return data
 typedef struct _GCIFImage {
-	unsigned char *rgba;	// RGBA pixels; free with "delete []rgba" when done
-	int width, height;		// Dimensions in pixels
+	unsigned char *rgba;	// RGBA pixels.  Free with free(i.rgba); when done.
+	int xsize, ysize;		// Dimensions in pixels
 } GCIFImage;
 
 
@@ -70,47 +72,71 @@ typedef struct _GCIFImage {
 #ifdef CAT_COMPILE_MMAP
 
 /*
-	gcif_read_file
-
-	Read from the given file path using blocking memory-mapped file I/O.
-
-	This function is thread-safe, meaning you can read two images simultaneously.
-
-	On success it returns GCIF_RE_OK.  Otherwise it returns a failure code from
-	the table above.  A string version of the failure code can be retrieved by
-	calling gcif_read_errstr().
-
-	On failure, the GCIFImage output can be safely ignored.
-	On success, you are responsible for freeing the image memory by calling
-	the gcif_free_image() function below.
-*/
+ * gcif_read_file()
+ *
+ * Read from the given file path using blocking memory-mapped file I/O.
+ *
+ * This function is thread-safe, meaning you can read two images simultaneously.
+ *
+ * On success it returns GCIF_RE_OK.  Otherwise it returns a failure code from
+ * the table above.  A string version of the failure code can be retrieved by
+ * calling gcif_read_errstr().
+ *
+ * On failure, the GCIFImage output can be safely ignored.
+ * On success, you are responsible for freeing rgba pointer with free(i.rgba);
+ */
 int gcif_read_file(const char *input_file_path_in, GCIFImage *image_out);
 
 #endif // CAT_COMPILE_MMAP
 
 
 /*
-	gcif_read_memory
-
-	Read the image from the given memory buffer.
-
-	See: gcif_read_file() above for more important usage information.
-*/
+ * gcif_read_memory()
+ *
+ * Read the image from the given memory buffer.
+ *
+ * On success it returns GCIF_RE_OK.  Otherwise it returns a failure code from
+ * the table above.  A string version of the failure code can be retrieved by
+ * calling gcif_read_errstr().
+ *
+ * On failure, the GCIFImage output can be safely ignored.
+ * On success, you are responsible for freeing rgba pointer with free(i.rgba);
+ */
 int gcif_read_memory(const void *file_data_in, long file_size_bytes_in, GCIFImage *image_out);
 
 /*
- * Returns GCIF_RE_OK if the data is for a GCIF file.
+ * gcif_read_memory_to_buffer()
+ *
+ * Read the image from a given memory buffer to a given memory buffer.
+ *
+ * Similar to functions except memory management is handled by the caller.
+ *
+ * If xsize, ysize do not match actual image dimensions, the function fails.
+ *
+ * On success it returns GCIF_RE_OK.  Otherwise it returns a failure code from
+ * the table above.  A string version of the failure code can be retrieved by
+ * calling gcif_read_errstr().
  */
-int gcif_sig_cmp(const void *file_data_in, long file_size_bytes_in);
+int gcif_read_memory_to_buffer(const void *file_data_in, long file_size_bytes_in, GCIFImage *image_out);
 
 /*
-	gcif_free_image
+ * gcif_get_size()
+ *
+ * xsize and ysize will be set to the size of the decompressed image.  This is
+ * a fast utility function.
+ *
+ * Returns GCIF_RE_OK if the data is for a GCIF file else a nonzero error code.
+ */
+int gcif_get_size(const void *file_data_in, long file_size_bytes_in, int *xsize, int *ysize);
 
-	Frees memory associated with the given image file.
-
-	This is safe to call when the read function fails.
-*/
-void gcif_free_image(const void *rgba);
+/*
+ * gcif_sig_cmp()
+ *
+ * Checks if the given data corresponds to a GCIF file.
+ *
+ * Returns GCIF_RE_OK if the data is for a GCIF file else a nonzero error code.
+ */
+int gcif_sig_cmp(const void *file_data_in, long file_size_bytes_in);
 
 
 #ifdef __cplusplus

@@ -30,37 +30,37 @@
 #define IMAGE_READER_HPP
 
 #include "Platform.hpp"
-#include "HotRodHash.hpp"
 #include "MappedFile.hpp"
 #include "Enforcer.hpp"
 
 namespace cat {
 
 
-struct ImageHeader {
-	u16 width, height; // pixels
-
-	u32 headHash;	// Hash of head words
-	u32 fastHash;	// Fast hash of data words (used during normal decoding)
-	u32 goodHash;	// Good hash of data words (used during verification mode)
-};
-
-
 //// ImageReader
 
 class ImageReader {
+public:
+	static const u32 HEAD_MAGIC = 0x46494347; // "GCIF" (LE32)
+	static const u32 MAX_X_BITS = 14;
+	static const u32 MAX_X = (1 << MAX_X_BITS) - 1;
+	static const u32 MAX_Y_BITS = 14;
+	static const u32 MAX_Y = (1 << MAX_Y_BITS) - 1;
+
+	struct Header {
+		u16 xsize, ysize; // pixels
+	};
+
+protected:
 #ifdef CAT_COMPILE_MMAP
 	MappedFile _file;
 	MappedView _fileView;
 #endif // CAT_COMPILE_MMAP
 
-	ImageHeader _header;
-
-	HotRodHash _hash;
+	Header _header;
 
 	bool _eof;
 
-	const u32 *_words;
+	const u32 * CAT_RESTRICT _words;
 	int _wordCount;
 	int _wordsLeft;
 
@@ -88,11 +88,11 @@ public:
 
 	// Initialize with file or memory buffer
 #ifdef CAT_COMPILE_MMAP
-	int init(const char *path);
+	int init(const char * CAT_RESTRICT path);
 #endif // CAT_COMPILE_MMAP
-	int init(const void *buffer, long bytes);
+	int init(const void * CAT_RESTRICT buffer, long bytes);
 
-	CAT_INLINE ImageHeader *getImageHeader() {
+	CAT_INLINE Header *getHeader() {
 		return &_header;
 	}
 
@@ -232,15 +232,6 @@ public:
 	// No bits left to read?
 	CAT_INLINE bool eof() {
 		return _eof;
-	}
-
-	static const u32 HEAD_WORDS = 5;
-	static const u32 HEAD_MAGIC = 0x46494347;
-	static const u32 HEAD_SEED = 0x120CA71D;
-	static const u32 DATA_SEED = 0xCA71D123;
-
-	CAT_INLINE bool finalizeCheckHash() {
-		return _header.fastHash == _hash.final(_wordCount);
 	}
 };
 

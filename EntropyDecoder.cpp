@@ -25,54 +25,72 @@
 	ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 	POSSIBILITY OF SUCH DAMAGE.
 */
-
-#include "HotRodHash.hpp"
+#include "EntropyDecoder.hpp"
 using namespace cat;
 
-void FileValidationHash::hashBytes(u8 *bytes, int bc) {
-	int wc = bc >> 2;
-	u32 *keys = reinterpret_cast<u32*>( bytes );
-	for (int ii = 0; ii < wc; ++ii) {
-		u32 k1 = keys[ii];
+bool EntropyDecoder::init(int num_syms, int zrle_syms, int huff_lut_bits, ImageReader &reader) {
+	_num_syms = num_syms;
 
-		k1 *= c1;
-		k1 = CAT_ROL32(k1, 15);
-		k1 *= c2;
+	CAT_DEBUG_ENFORCE(num_syms > 0 && zrle_syms > 0);
 
-		h1 ^= k1;
-		h1 = CAT_ROL32(h1, 13); 
-		h1 = h1 * 5 + 0xe6546b64;
+	// If using AZ symbols,
+	if (reader.readBit()) {
+		_zrle_offset = zrle_syms - 1;
+
+		if (!_az.init(num_syms, reader, huff_lut_bits)) {
+			return false;
+		}
+
+		if (!_bz.init(num_syms + zrle_syms, reader, huff_lut_bits)) {
+			return false;
+		}
+	} else {
+		// Cool: Does not slow down decoder to conditionally turn off zRLE!
+		if (!_bz.init(num_syms, reader, huff_lut_bits)) {
+			return false;
+		}
 	}
 
-	bytes += wc << 2;
-	u32 k1 = 0;
-	switch (bc & 3) {
-		case 3: k1 ^= bytes[2] << 16;
-		case 2: k1 ^= bytes[1] << 8;
-		case 1: k1 ^= bytes[0];
-				k1 *= c1;
-				k1 = CAT_ROL32(k1, 15);
-				k1 *= c2;
-				h1 ^= k1;
-	}
+	_afterZero = false;
+	_zeroRun = 0;
+
+	return true;
 }
 
-void HotRodHash::hashBytes(u8 *bytes, int bc) {
-	CAT_DEBUG_ENFORCE(bytes != 0 && bc >= 0);
-
-	int wc = bc >> 2;
-	u32 *keys = reinterpret_cast<u32*>( bytes );
-	hashWords(keys, wc);
-
-	bytes += wc << 2;
-	u32 k1 = 0;
-	switch (bc & 3) {
-	case 3: k1 ^= bytes[2] << 16;
-	case 2: k1 ^= bytes[1] << 8;
-	case 1: k1 ^= bytes[0];
-			h1 += k1 * c1;
-			h1 ^= CAT_ROL32(k1, 15);
-	default:;
+u16 EntropyDecoder::next(ImageReader &reader) {
+	// If in a zero run,
+	if (_zeroRun > 0) {
+		--_zeroRun;
+		return 0;
 	}
+
+	// If after zero,
+	if (_afterZero) {
+		_afterZero = false;
+		return _az.next(reader);
+	}
+
+	// Read before-zero symbol
+	const int num_syms = _num_syms;
+	u16 sym = (u16)_bz.next(reader);
+
+	// If not a zero run,
+	if (sym < num_syms) {
+		return sym;
+	}
+
+	// Decode zero run
+	u32 zeroRun = sym - num_syms;
+
+	// If extra bits were used,
+	if (zeroRun >= _zrle_offset) {
+		CAT_DEBUG_ENFORCE(zeroRun == _zrle_offset);
+
+		zeroRun += reader.read255255();
+	}
+
+	_zeroRun = zeroRun;
+	_afterZero = true;
+	return 0;
 }
 

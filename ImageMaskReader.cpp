@@ -50,39 +50,12 @@ using namespace cat;
 
 //// ImageMaskReader
 
-void ImageMaskReader::clear() {
-	if (_mask) {
-		delete []_mask;
-		_mask = 0;
-	}
-	if (_rle) {
-		delete []_rle;
-		_rle = 0;
-	}
-	if (_lz) {
-		delete []_lz;
-		_lz = 0;
-	}
-}
-
-int ImageMaskReader::decodeLZ(ImageReader &reader) {
+int ImageMaskReader::decodeLZ(ImageReader & CAT_RESTRICT reader) {
 	int rleSize = reader.read9();
 	int lzSize = reader.read9();
 
-	if (!_rle || rleSize > _rle_alloc) {
-		if (_rle) {
-			delete []_rle;
-		}
-		_rle = new u8[rleSize];
-		_rle_alloc = rleSize;
-	}
-	if (!_lz || lzSize > _lz_alloc) {
-		if (_lz) {
-			delete []_lz;
-		}
-		_lz = new u8[lzSize];
-		_lz_alloc = lzSize;
-	}
+	_rle.resize(rleSize);
+	_lz.resize(lzSize);
 
 	// If compressed,
 	if (reader.readBit()) {
@@ -108,7 +81,7 @@ int ImageMaskReader::decodeLZ(ImageReader &reader) {
 		return GCIF_RE_MASK_LZ;
 	}
 
-	int result = LZ4_uncompress_unknownOutputSize(reinterpret_cast<const char *>( _lz ), reinterpret_cast<char *>( _rle ), lzSize, rleSize);
+	int result = LZ4_uncompress_unknownOutputSize(reinterpret_cast<const char *>( _lz.get() ), reinterpret_cast<char *>( _rle.get() ), lzSize, rleSize);
 
 	if (result != rleSize) {
 		CAT_DEBUG_EXCEPTION();
@@ -121,34 +94,28 @@ int ImageMaskReader::decodeLZ(ImageReader &reader) {
 	}
 
 	// Set up decoder
-	_rle_next = _rle;
+	_rle_next = _rle.get();
 	_rle_remaining = rleSize;
 	_scanline_y = 0;
 
 	return GCIF_RE_OK;
 }
 
-int ImageMaskReader::init(const ImageHeader *header) {
-	const int maskWidth = header->width;
-	const int maskHeight = header->height;
+int ImageMaskReader::init(int xsize, int ysize) {
+	const int maskWidth = xsize;
+	const int maskHeight = ysize;
 
 	_color = 0;
 	_stride = (maskWidth + 31) >> 5;
-	_width = maskWidth;
-	_height = maskHeight;
+	_xsize = maskWidth;
+	_ysize = maskHeight;
 
-	if (!_mask || _stride > _mask_alloc) {
-		if (_mask) {
-			delete []_mask;
-		}
-		_mask = new u32[_stride];
-		_mask_alloc = _stride;
-	}
+	_mask.resize(_stride);
 
 	return GCIF_RE_OK;
 }
 
-int ImageMaskReader::read(ImageReader &reader) {
+int ImageMaskReader::read(ImageReader & CAT_RESTRICT reader, int planes, int xsize, int ysize) {
 #ifdef CAT_COLLECT_STATS
 	m_clock = Clock::ref();
 
@@ -157,7 +124,7 @@ int ImageMaskReader::read(ImageReader &reader) {
 
 	int err;
 
-	if ((err = init(reader.getImageHeader()))) {
+	if ((err = init(xsize, ysize))) {
 		return err;
 	}
 
@@ -167,14 +134,18 @@ int ImageMaskReader::read(ImageReader &reader) {
 
 	_enabled = reader.readBit() != 0;
 	if (_enabled) {
-		_color = getLE(reader.readWord());
+		if (planes == 4) {
+			_color = getLE(reader.readWord());
+		} else {
+			_color = 0;
+		}
 
 		if ((err = decodeLZ(reader))) {
 			return err;
 		}
 	} else {
 		// Clear mask when disabled to avoid two checks
-		CAT_CLR(_mask, sizeof(u32) * _stride);
+		_mask.fill_00();
 	}
 
 #ifdef CAT_COLLECT_STATS
@@ -190,12 +161,12 @@ int ImageMaskReader::read(ImageReader &reader) {
 
 const u32 *ImageMaskReader::nextScanline() {
 	if (!_enabled) {
-		return _mask;
+		return _mask.get();
 	}
 
 	// Read RLE symbol count
 	int sym_count = 0;
-	const u8 *rle = _rle_next;
+	const u8 * CAT_RESTRICT rle = _rle_next;
 	int rle_remaining = _rle_remaining;
 
 	while (rle_remaining-- > 0) {	
@@ -208,7 +179,7 @@ const u32 *ImageMaskReader::nextScanline() {
 	}
 
 	const int stride = _stride;
-	u32 *row = _mask;
+	u32 * CAT_RESTRICT row = _mask.get();
 
 	// If no symbols on this row,
 	if (sym_count == 0) {
@@ -224,8 +195,10 @@ const u32 *ImageMaskReader::nextScanline() {
 		// If first row,
 		int bitOn = 0;
 		if (_scanline_y == 0) {
-			// Set up specially
-			row[0] = 0;
+			// Initialize to all 0
+			for (int ii = 0; ii < stride; ++ii) {
+				row[ii] = 0;
+			}
 			bitOn = 1;
 		}
 
@@ -274,17 +247,8 @@ const u32 *ImageMaskReader::nextScanline() {
 					if (bitOn ^= 1) {
 						// Fill bottom bits with 0s (do nothing)
 
-						// For each intervening word and new one,
-						for (int ii = wordOffset + 1; ii < newOffset; ++ii) {
-							row[ii] = 0;
-						}
-
 						// Write a 1 at the new location
-						if (newOffset <= wordOffset) {
-							row[newOffset] |= 1 << shift;
-						} else {
-							row[newOffset] = 1 << shift;
-						}
+						row[newOffset] |= 1 << shift;
 					} else {
 						u32 bitsUsedMask = 0xffffffff >> (bitOffset & 31);
 
@@ -403,7 +367,7 @@ const u32 *ImageMaskReader::nextScanline() {
 	_rle_remaining = rle_remaining;
 	_rle_next = rle;
 	++_scanline_y;
-	return _mask;
+	return _mask.get();
 }
 
 
@@ -411,7 +375,7 @@ const u32 *ImageMaskReader::nextScanline() {
 
 bool ImageMaskReader::dumpStats() {
 	if (!_enabled) {
-		CAT_INANE("stats") << "(Mask Decode)   Disabled.";
+		CAT_INANE("stats") << "(Mask Decode) Disabled.";
 	} else {
 		CAT_INANE("stats") << "(Mask Decode)   Chosen Color : (" << (_color & 255) << "," << ((_color >> 8) & 255) << "," << ((_color >> 16) & 255) << "," << ((_color >> 24) & 255) << ") ...";
 		CAT_INANE("stats") << "(Mask Decode) Initialization : " <<  Stats.initUsec << " usec (" << Stats.initUsec * 100.f / Stats.overallUsec << " %total)";

@@ -28,44 +28,93 @@
 
 #include "GCIFReader.h"
 #include "ImageReader.hpp"
+#include "SmallPaletteReader.hpp"
 #include "ImageMaskReader.hpp"
-#include "ImageLZReader.hpp"
-#include "ImageCMReader.hpp"
+#include "ImagePaletteReader.hpp"
+#include "ImageRGBAReader.hpp"
 #include "EndianNeutral.hpp"
+#include <stdlib.h>
 using namespace cat;
 
 static int gcif_read(ImageReader &reader, GCIFImage *image) {
 	int err;
 
-	// Fill in image width and height
-	ImageHeader *header = reader.getImageHeader();
-	image->width = header->width;
-	image->height = header->height;
+	// Fill in image xsize and ysize
+	ImageReader::Header *header = reader.getHeader();
 
-	// Color mask
-	ImageMaskReader maskReader;
-	if ((err = maskReader.read(reader))) {
+	// Validate input buffer and sizes for direct-to-memory mode
+	if (image->xsize < 0 || image->ysize < 0) {
+		image->xsize = header->xsize;
+		image->ysize = header->ysize;
+	} else if (image->xsize != header->xsize
+			|| image->ysize != header->ysize
+			|| image->rgba == 0) {
+		return GCIF_RE_BAD_DIMS;
+	}
+
+	// If we need to allocate memory for this image,
+	if (!image->rgba) {
+		u64 size = image->xsize * (u64)image->ysize * 4;
+
+		void *output;
+#ifdef posix_memalign
+		posix_memalign(&output, 8, size);
+#elif defined(memalign)
+		output = memalign(8, size);
+#else
+		output = malloc(size);
+#endif
+		image->rgba = (u8 *)output;
+	}
+
+	// Small Palette
+	SmallPaletteReader smallPaletteReader;
+	if ((err = smallPaletteReader.readHead(reader, image->rgba))) {
 		return err;
 	}
-	maskReader.dumpStats();
 
-	// 2D-LZ Exact Match
-	ImageLZReader imageLZReader;
-	if ((err = imageLZReader.read(reader))) {
-		return err;
-	}
-	imageLZReader.dumpStats();
+	// If small palette is being used,
+	if (smallPaletteReader.enabled()) {
+		if (smallPaletteReader.multipleColors()) {
+			const int pack_x = smallPaletteReader.getPackX();
+			const int pack_y = smallPaletteReader.getPackY();
 
-	// Context Modeling Decompression
-	ImageCMReader imageCMReader;
-	if ((err = imageCMReader.read(reader, maskReader, imageLZReader, image))) {
-		return err;
-	}
-	imageCMReader.dumpStats();
+			// Color Mask
+			ImageMaskReader imageMaskReader;
+			if ((err = imageMaskReader.read(reader, 1, pack_x, pack_y))) {
+				return err;
+			}
+			imageMaskReader.dumpStats();
 
-	// Verify hash
-	if (!reader.finalizeCheckHash()) {
-		return GCIF_RE_BAD_HASH;
+			// Finish reading small paletted image
+			if ((err = smallPaletteReader.readTail(reader, imageMaskReader))) {
+				return err;
+			}
+			smallPaletteReader.dumpStats();
+		}
+	} else {
+		// Color Mask
+		ImageMaskReader imageMaskReader;
+		if ((err = imageMaskReader.read(reader, 4, image->xsize, image->ysize))) {
+			return err;
+		}
+		imageMaskReader.dumpStats();
+
+		// Global Palette Decompression
+		ImagePaletteReader imagePaletteReader;
+		if ((err = imagePaletteReader.read(reader, imageMaskReader, image))) {
+			return err;
+		}
+		imagePaletteReader.dumpStats();
+
+		if (!imagePaletteReader.enabled()) {
+			// RGBA Decompression
+			ImageRGBAReader imageRGBAReader;
+			if ((err = imageRGBAReader.read(reader, imageMaskReader, image))) {
+				return err;
+			}
+			imageRGBAReader.dumpStats();
+		}
 	}
 
 	return GCIF_RE_OK;
@@ -78,8 +127,8 @@ extern "C" int gcif_read_file(const char *input_file_path_in, GCIFImage *image_o
 
 	// Initialize image data
 	image_out->rgba = 0;
-	image_out->width = -1;
-	image_out->height = -1;
+	image_out->xsize = -1;
+	image_out->ysize = -1;
 
 	// Initialize image reader
 	ImageReader reader;
@@ -87,19 +136,49 @@ extern "C" int gcif_read_file(const char *input_file_path_in, GCIFImage *image_o
 		return err;
 	}
 
-	return gcif_read(reader, image_out);
+	if ((err = gcif_read(reader, image_out))) {
+		if (image_out->rgba) {
+			free(image_out->rgba);
+			image_out->rgba = 0;
+		}
+		return err;
+	}
+
+	return GCIF_RE_OK;
 }
 
 #endif // CAT_COMPILE_MMAP
 
-extern "C" int gcif_sig_cmp(const void *file_data_in, long file_size_bytes_in) {
+extern "C" int gcif_get_size(const void *file_data_in, long file_size_bytes_in, int *xsize, int *ysize) {
 	// Validate length
-	if (file_size_bytes_in / sizeof(u32) < ImageReader::HEAD_WORDS) {
+	if (file_size_bytes_in < 8) {
 		return GCIF_RE_BAD_HEAD;
 	}
 
 	// Validate signature
-	u32 sig = getLE(*reinterpret_cast<const u32 *>( file_data_in ));
+	const u32 *head_word = reinterpret_cast<const u32 *>( file_data_in );
+	u32 sig = getLE(head_word[0]);
+	if (sig != ImageReader::HEAD_MAGIC) {
+		return GCIF_RE_BAD_HEAD;
+	}
+
+	// Read xsize, ysize
+	u32 word1 = getLE(head_word[1]);
+	*xsize = (u16)((word1 >> (32 - ImageReader::MAX_X_BITS)) & ((1 << ImageReader::MAX_X_BITS) - 1));
+	*ysize = (u16)((word1 >> (32 - ImageReader::MAX_X_BITS - ImageReader::MAX_Y_BITS)) & ((1 << ImageReader::MAX_Y_BITS) - 1));
+
+	return GCIF_RE_OK;
+}
+
+extern "C" int gcif_sig_cmp(const void *file_data_in, long file_size_bytes_in) {
+	// Validate length
+	if (file_size_bytes_in < 8) {
+		return GCIF_RE_BAD_HEAD;
+	}
+
+	// Validate signature
+	const u32 *head_word = reinterpret_cast<const u32 *>( file_data_in );
+	u32 sig = getLE(head_word[0]);
 	if (sig != ImageReader::HEAD_MAGIC) {
 		return GCIF_RE_BAD_HEAD;
 	}
@@ -112,8 +191,8 @@ extern "C" int gcif_read_memory(const void *file_data_in, long file_size_bytes_i
 
 	// Initialize image data
 	image_out->rgba = 0;
-	image_out->width = -1;
-	image_out->height = -1;
+	image_out->xsize = -1;
+	image_out->ysize = -1;
 
 	// Initialize image reader
 	ImageReader reader;
@@ -121,15 +200,29 @@ extern "C" int gcif_read_memory(const void *file_data_in, long file_size_bytes_i
 		return err;
 	}
 
-	return gcif_read(reader, image_out);
+	if ((err = gcif_read(reader, image_out))) {
+		if (image_out->rgba) {
+			free(image_out->rgba);
+			image_out->rgba = 0;
+		}
+		return err;
+	}
+
+	return GCIF_RE_OK;
 }
 
-extern "C" void gcif_free_image(const void *rgba) {
-	// If image data was allocated,
-	if (rgba) {
-		// Free it
-		delete []reinterpret_cast<const u8 *>( rgba );
+extern "C" int gcif_read_memory_to_buffer(const void *file_data_in, long file_size_bytes_in, GCIFImage *image_out) {
+	int err;
+
+	// Initialize image reader
+	ImageReader reader;
+	if ((err = reader.init(file_data_in, file_size_bytes_in))) {
+		return err;
 	}
+
+	// Note: Allowing RGBA pointer to fall through and do not free it on error.
+
+	return gcif_read(reader, image_out);
 }
 
 extern "C" const char *gcif_read_errstr(int err) {
@@ -158,11 +251,14 @@ extern "C" const char *gcif_read_errstr(int err) {
 		case GCIF_RE_LZ_BAD:		// Bad data in LZ section
 			return "Corrupted:GCIF_RE_LZ_BAD";
 
-		case GCIF_RE_CM_CODES:	// CM codelen read failed
-			return "Corrupted:GCIF_RE_CM_CODES";
+		case GCIF_RE_BAD_PAL:		// Bad data in Palette section
+			return "Corrupted:GCIF_RE_BAD_PAL";
 
-		case GCIF_RE_BAD_HASH:	// Image hash does not match
-			return "Corrupted:GCIF_RE_BAD_HASH";
+		case GCIF_RE_BAD_MONO:		// Bad data in Mono section
+			return "Corrupted:GCIF_RE_BAD_MONO";
+
+		case GCIF_RE_BAD_RGBA:		// Bad data in RGBA section
+			return "Corrupted:GCIF_RE_BAD_RGBA";
 
 		default:
 			break;
